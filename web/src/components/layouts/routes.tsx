@@ -14,6 +14,7 @@ import {
   Sparkle,
   FileJson,
   Search,
+  Home,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { type Entitlement } from "@/src/features/entitlements/constants/entitlements";
@@ -24,6 +25,7 @@ import { SupportMenuDropdown } from "@/src/components/nav/support-menu-dropdown"
 import { SidebarMenuButton } from "@/src/components/ui/sidebar";
 import { useCommandMenu } from "@/src/features/command-k-menu/CommandMenuProvider";
 import { usePostHogClientCapture } from "@/src/features/posthog-analytics/usePostHogClientCapture";
+import { CloudStatusMenu } from "@/src/features/cloud-status-notification/components/CloudStatusMenu";
 
 export type Route = {
   title: string;
@@ -63,9 +65,16 @@ export const ROUTES: Route[] = [
     icon: Grid2X2,
   },
   {
-    title: "Dashboard",
+    title: "Home",
     pathname: `/project/[projectId]`,
+    icon: Home,
+  },
+  {
+    title: "Dashboards",
+    pathname: `/project/[projectId]/dashboards`,
     icon: LayoutDashboard,
+    label: "Beta",
+    entitlements: ["custom-dashboards"],
   },
   {
     title: "Tracing",
@@ -150,6 +159,12 @@ export const ROUTES: Route[] = [
     entitlements: ["cloud-billing"],
     organizationRbacScope: "langfuseCloudBilling:CRUD",
     show: ({ organization }) => organization?.plan === "cloud:hobby",
+  },
+  {
+    title: "Cloud Status",
+    bottom: true,
+    pathname: "",
+    menuNode: <CloudStatusMenu />,
   },
   {
     title: "Settings",

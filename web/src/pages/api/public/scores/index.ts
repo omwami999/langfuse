@@ -1,6 +1,6 @@
 import { v4 } from "uuid";
 
-import { createAuthedAPIRoute } from "@/src/features/public-api/server/createAuthedAPIRoute";
+import { createAuthedProjectAPIRoute } from "@/src/features/public-api/server/createAuthedProjectAPIRoute";
 import { withMiddlewares } from "@/src/features/public-api/server/withMiddlewares";
 import {
   GetScoresQuery,
@@ -20,7 +20,7 @@ import {
 } from "@/src/features/public-api/server/scores";
 
 export default withMiddlewares({
-  POST: createAuthedAPIRoute({
+  POST: createAuthedProjectAPIRoute({
     name: "Create Score",
     bodySchema: PostScoresBody,
     responseSchema: PostScoresResponse,
@@ -49,46 +49,33 @@ export default withMiddlewares({
       return { id: event.body.id };
     },
   }),
-  GET: createAuthedAPIRoute({
+  GET: createAuthedProjectAPIRoute({
     name: "/api/public/scores",
     querySchema: GetScoresQuery,
     responseSchema: GetScoresResponse,
     fn: async ({ query, auth }) => {
+      const scoreParams = {
+        projectId: auth.scope.projectId,
+        page: query.page ?? undefined,
+        limit: query.limit ?? undefined,
+        userId: query.userId ?? undefined,
+        name: query.name ?? undefined,
+        configId: query.configId ?? undefined,
+        queueId: query.queueId ?? undefined,
+        traceTags: query.traceTags ?? undefined,
+        dataType: query.dataType ?? undefined,
+        fromTimestamp: query.fromTimestamp ?? undefined,
+        toTimestamp: query.toTimestamp ?? undefined,
+        environment: query.environment ?? undefined,
+        traceEnvironment: query.environment ?? undefined,
+        source: query.source ?? undefined,
+        value: query.value ?? undefined,
+        operator: query.operator ?? undefined,
+        scoreIds: query.scoreIds ?? undefined,
+      };
       const [items, count] = await Promise.all([
-        generateScoresForPublicApi({
-          projectId: auth.scope.projectId,
-          page: query.page ?? undefined,
-          limit: query.limit ?? undefined,
-          userId: query.userId ?? undefined,
-          name: query.name ?? undefined,
-          configId: query.configId ?? undefined,
-          queueId: query.queueId ?? undefined,
-          traceTags: query.traceTags ?? undefined,
-          dataType: query.dataType ?? undefined,
-          fromTimestamp: query.fromTimestamp ?? undefined,
-          toTimestamp: query.toTimestamp ?? undefined,
-          source: query.source ?? undefined,
-          value: query.value ?? undefined,
-          operator: query.operator ?? undefined,
-          scoreIds: query.scoreIds ?? undefined,
-        }),
-        getScoresCountForPublicApi({
-          projectId: auth.scope.projectId,
-          page: query.page ?? undefined,
-          limit: query.limit ?? undefined,
-          userId: query.userId ?? undefined,
-          name: query.name ?? undefined,
-          configId: query.configId ?? undefined,
-          queueId: query.queueId ?? undefined,
-          traceTags: query.traceTags ?? undefined,
-          dataType: query.dataType ?? undefined,
-          fromTimestamp: query.fromTimestamp ?? undefined,
-          toTimestamp: query.toTimestamp ?? undefined,
-          source: query.source ?? undefined,
-          value: query.value ?? undefined,
-          operator: query.operator ?? undefined,
-          scoreIds: query.scoreIds ?? undefined,
-        }),
+        generateScoresForPublicApi(scoreParams),
+        getScoresCountForPublicApi(scoreParams),
       ]);
 
       const finalCount = count ? count : 0;

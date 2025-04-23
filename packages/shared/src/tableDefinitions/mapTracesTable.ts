@@ -1,6 +1,6 @@
-import { UiColumnMapping } from "./types";
+import { UiColumnMappings } from "./types";
 
-export const tracesTableUiColumnDefinitions: UiColumnMapping[] = [
+export const tracesTableUiColumnDefinitions: UiColumnMappings = [
   {
     uiTableName: "⭐️",
     uiTableId: "bookmarked",
@@ -63,6 +63,12 @@ export const tracesTableUiColumnDefinitions: UiColumnMapping[] = [
     clickhouseSelect: "release",
   },
   {
+    uiTableName: "Environment",
+    uiTableId: "environment",
+    clickhouseTableName: "traces",
+    clickhouseSelect: "environment",
+  },
+  {
     uiTableName: "Tags",
     uiTableId: "tags",
     clickhouseTableName: "traces",
@@ -117,8 +123,8 @@ export const tracesTableUiColumnDefinitions: UiColumnMapping[] = [
     clickhouseTypeOverwrite: "Decimal64(3)",
   },
   {
-    uiTableName: "Usage",
-    uiTableId: "usage",
+    uiTableName: "Tokens",
+    uiTableId: "tokens",
     clickhouseTableName: "observations",
     clickhouseSelect:
       "if(mapExists((k, v) -> (k = 'total'), usage_details), usage_details['total'], NULL)",

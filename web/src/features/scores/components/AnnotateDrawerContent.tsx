@@ -206,6 +206,7 @@ export function AnnotateDrawerContent({
   isSelectHidden = false,
   queueId,
   actionButtons,
+  environment,
 }: {
   traceId: string;
   scores: APIScore[];
@@ -222,6 +223,7 @@ export function AnnotateDrawerContent({
   isSelectHidden?: boolean;
   queueId?: string;
   actionButtons?: React.ReactNode;
+  environment?: string;
 }) {
   const capture = usePostHogClientCapture();
   const router = useRouter();
@@ -359,7 +361,13 @@ export function AnnotateDrawerContent({
 
     await Promise.all([
       utils.scores.invalidate(),
-      utils.traces.invalidate(),
+      utils.traces.byIdWithObservationsAndScores.invalidate(
+        { projectId, traceId },
+        {
+          type: "all",
+          refetchType: "all",
+        },
+      ),
       utils.sessions.invalidate(),
     ]);
 
@@ -404,6 +412,7 @@ export function AnnotateDrawerContent({
           observationId,
           value,
           queueId,
+          environment,
         });
 
         await mutUpdateScores.mutateAsync({
@@ -433,6 +442,7 @@ export function AnnotateDrawerContent({
             observationId,
             value,
             queueId,
+            environment,
           });
 
           await mutUpdateScores.mutateAsync({
@@ -457,6 +467,7 @@ export function AnnotateDrawerContent({
             observationId,
             value,
             queueId,
+            environment,
           });
 
           const createPromise = mutCreateScores.mutateAsync({
@@ -644,6 +655,7 @@ export function AnnotateDrawerContent({
           value,
           comment,
           queueId,
+          environment,
         });
 
         await mutUpdateScores.mutateAsync({

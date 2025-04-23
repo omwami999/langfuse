@@ -17,8 +17,8 @@ import {
   singleFilter,
   timeFilter,
   tracesTableUiColumnDefinitions,
+  type Observation,
 } from "@langfuse/shared";
-import { type ObservationView } from "@langfuse/shared";
 import {
   traceException,
   getTracesTable,
@@ -27,7 +27,7 @@ import {
   getScoresGroupedByName,
   getTracesGroupedByName,
   getTracesGroupedByTags,
-  getObservationsViewForTrace,
+  getObservationsForTrace,
   getTraceById,
   logger,
   upsertTrace,
@@ -51,17 +51,17 @@ const TraceFilterOptions = z.object({
 });
 type TraceFilterOptions = z.infer<typeof TraceFilterOptions>;
 
-export type ObservationReturnType = Omit<
-  ObservationView,
-  "input" | "output" | "inputPrice" | "outputPrice" | "totalPrice" | "metadata"
+export type ObservationReturnTypeWithMetadata = Omit<
+  Observation,
+  "input" | "output"
 > & {
   traceId: string;
-  usageDetails: Record<string, number>;
-  costDetails: Record<string, number>;
 };
 
-export type ObservationReturnTypeWithMetadata = ObservationReturnType &
-  Pick<ObservationView, "metadata">;
+export type ObservationReturnType = Omit<
+  ObservationReturnTypeWithMetadata,
+  "metadata"
+>;
 
 export const traceRouter = createTRPCRouter({
   hasAny: protectedProjectProcedure
@@ -76,14 +76,14 @@ export const traceRouter = createTRPCRouter({
   all: protectedProjectProcedure
     .input(TraceFilterOptions)
     .query(async ({ input, ctx }) => {
-      const traces = await getTracesTable(
-        ctx.session.projectId,
-        input.filter ?? [],
-        input.searchQuery ?? undefined,
-        input.orderBy,
-        input.limit,
-        input.page,
-      );
+      const traces = await getTracesTable({
+        projectId: ctx.session.projectId,
+        filter: input.filter ?? [],
+        searchQuery: input.searchQuery ?? undefined,
+        orderBy: input.orderBy,
+        limit: input.limit,
+        page: input.page,
+      });
       return { traces };
     }),
   countAll: protectedProjectProcedure
@@ -126,12 +126,15 @@ export const traceRouter = createTRPCRouter({
         traceIds: res.map((r) => r.id),
         limit: 1000,
         offset: 0,
+        excludeMetadata: true,
+        includeHasMetadata: true,
       });
 
-      const validatedScores = filterAndValidateDbScoreList(
+      const validatedScores = filterAndValidateDbScoreList({
         scores,
-        traceException,
-      );
+        includeHasMetadata: true,
+        onParseError: traceException,
+      });
 
       return res.map((row) => ({
         ...row,
@@ -178,6 +181,7 @@ export const traceRouter = createTRPCRouter({
         traceId: z.string(), // used for security check
         projectId: z.string(), // used for security check
         timestamp: z.date().nullish(), // timestamp of the trace. Used to query CH more efficiently
+        fromTimestamp: z.date().nullish(), // min timestamp of the trace. Used to query CH more efficiently
       }),
     )
     .query(async ({ ctx }) => {
@@ -192,39 +196,35 @@ export const traceRouter = createTRPCRouter({
       z.object({
         traceId: z.string(), // used for security check
         timestamp: z.date().nullish(), // timestamp of the trace. Used to query CH more efficiently
+        fromTimestamp: z.date().nullish(), // min timestamp of the trace. Used to query CH more efficiently
         projectId: z.string(), // used for security check
       }),
     )
-    .query(async ({ input }) => {
-      const [trace, observations, scores] = await Promise.all([
-        getTraceById(
+    .query(async ({ input, ctx }) => {
+      const [observations, scores] = await Promise.all([
+        getObservationsForTrace(
           input.traceId,
           input.projectId,
-          input.timestamp ?? undefined,
-        ),
-        getObservationsViewForTrace(
-          input.traceId,
-          input.projectId,
-          input.timestamp ?? undefined,
+          input.timestamp ?? input.fromTimestamp ?? undefined,
         ),
         getScoresForTraces({
           projectId: input.projectId,
           traceIds: [input.traceId],
-          timestamp: input.timestamp ?? undefined,
+          timestamp: input.timestamp ?? input.fromTimestamp ?? undefined,
         }),
       ]);
 
-      if (!trace) {
+      if (!ctx.trace) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Trace not found",
         });
       }
 
-      const validatedScores = filterAndValidateDbScoreList(
+      const validatedScores = filterAndValidateDbScoreList({
         scores,
-        traceException,
-      );
+        onParseError: traceException,
+      });
 
       const obsStartTimes = observations
         .map((o) => o.startTime)
@@ -245,9 +245,9 @@ export const traceRouter = createTRPCRouter({
           : undefined;
 
       return {
-        ...trace,
-        input: trace.input ? JSON.stringify(trace.input) : undefined,
-        output: trace.output ? JSON.stringify(trace.output) : undefined,
+        ...ctx.trace,
+        input: ctx.trace.input ? JSON.stringify(ctx.trace.input) : null,
+        output: ctx.trace.output ? JSON.stringify(ctx.trace.output) : null,
         scores: validatedScores,
         latency: latencyMs !== undefined ? latencyMs / 1000 : undefined,
         observations: observations.map((o) => ({
@@ -260,7 +260,7 @@ export const traceRouter = createTRPCRouter({
   deleteMany: protectedProjectProcedure
     .input(
       z.object({
-        traceIds: z.array(z.string()).min(1, "Minimum 1 trace_Id is required."),
+        traceIds: z.array(z.string()).min(1, "Minimum 1 traceId is required."),
         projectId: z.string(),
         query: BatchActionQuerySchema.optional(),
         isBatchAction: z.boolean().default(false),
@@ -344,10 +344,10 @@ export const traceRouter = createTRPCRouter({
 
         let trace;
 
-        const clickhouseTrace = await getTraceById(
-          input.traceId,
-          input.projectId,
-        );
+        const clickhouseTrace = await getTraceById({
+          traceId: input.traceId,
+          projectId: input.projectId,
+        });
         if (clickhouseTrace) {
           trace = clickhouseTrace;
           clickhouseTrace.bookmarked = input.bookmarked;
@@ -389,10 +389,10 @@ export const traceRouter = createTRPCRouter({
           after: input.public,
         });
 
-        const clickhouseTrace = await getTraceById(
-          input.traceId,
-          input.projectId,
-        );
+        const clickhouseTrace = await getTraceById({
+          traceId: input.traceId,
+          projectId: input.projectId,
+        });
         if (!clickhouseTrace) {
           logger.error(
             `Trace not found in Clickhouse: ${input.traceId}. Skipping publishing.`,
@@ -435,10 +435,10 @@ export const traceRouter = createTRPCRouter({
           after: input.tags,
         });
 
-        const clickhouseTrace = await getTraceById(
-          input.traceId,
-          input.projectId,
-        );
+        const clickhouseTrace = await getTraceById({
+          traceId: input.traceId,
+          projectId: input.projectId,
+        });
         if (!clickhouseTrace) {
           logger.error(
             `Trace not found in Clickhouse: ${input.traceId}. Skipping tag update.`,

@@ -145,7 +145,7 @@ export const prepareClickhouse = async (
 
     const scoresQuery = `
     INSERT INTO scores
-    SELECT toString(floor(randUniform(0, 100))) AS id,
+    SELECT toString(number) AS id,
       toDateTime(now() - randUniform(0, ${opts.numberOfDays} * 24 * 60 * 60)) AS timestamp,
       '${projectId}' AS project_id,
       'default' AS environment,
@@ -159,6 +159,7 @@ export const prepareClickhouse = async (
       randUniform(0, 100) as value,
       'API' as source,
       'comment' as comment,
+      map('key', 'value') AS metadata,
       toString(rand() % 100) as author_user_id,
       toString(rand() % 100) as config_id,
       if (rand() < 0.33, 'NUMERIC', if (rand() < 0.5, 'CATEGORICAL', 'BOOLEAN')) as data_type,

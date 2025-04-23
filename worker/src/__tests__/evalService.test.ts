@@ -1,38 +1,40 @@
 import {
-  expect,
-  test,
-  describe,
+  ApiError,
+  LLMAdapter,
+  LangfuseNotFoundError,
+  variableMappingList,
+} from "@langfuse/shared";
+import { encrypt } from "@langfuse/shared/encryption";
+import { kyselyPrisma, prisma } from "@langfuse/shared/src/db";
+import {
+  convertDateToClickhouseDateTime,
+  createObservation,
+  createObservationsCh,
+  createTrace,
+  createTracesCh,
+  upsertObservation,
+  upsertTrace,
+} from "@langfuse/shared/src/server";
+import { randomUUID } from "crypto";
+import Decimal from "decimal.js";
+import { sql } from "kysely";
+import { afterEach } from "node:test";
+import {
   afterAll,
   beforeAll,
   beforeEach,
+  describe,
+  expect,
+  test,
 } from "vitest";
 import {
   createEvalJobs,
   evaluate,
   extractVariablesFromTracingData,
 } from "../ee/evaluation/evalService";
-import { kyselyPrisma, prisma } from "@langfuse/shared/src/db";
-import { randomUUID } from "crypto";
-import Decimal from "decimal.js";
-import { pruneDatabase } from "./utils";
-import { sql } from "kysely";
-import {
-  LLMAdapter,
-  LangfuseNotFoundError,
-  variableMappingList,
-  ApiError,
-} from "@langfuse/shared";
-import { encrypt } from "@langfuse/shared/encryption";
-import { OpenAIServer } from "./network";
-import { afterEach } from "node:test";
-import {
-  convertDateToClickhouseDateTime,
-  createTrace,
-  createTracesCh,
-  upsertObservation,
-  upsertTrace,
-} from "@langfuse/shared/src/server";
 import { compileHandlebarString } from "../features/utilities";
+import { OpenAIServer } from "./network";
+import { pruneDatabase } from "./utils";
 
 let OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const hasActiveKey = Boolean(OPENAI_API_KEY);
@@ -43,6 +45,7 @@ const openAIServer = new OpenAIServer({
   hasActiveKey,
   useDefaultResponse: false,
 });
+const jobTimestamp = new Date();
 
 beforeAll(openAIServer.setup);
 beforeEach(async () => {
@@ -95,7 +98,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -175,7 +178,7 @@ describe("eval service tests", () => {
         observationId: observationId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -258,7 +261,7 @@ describe("eval service tests", () => {
       };
 
       // This should exit early without an error as there is no trace yet.
-      await createEvalJobs({ event: payloadDataset });
+      await createEvalJobs({ event: payloadDataset, jobTimestamp });
 
       const jobsAfterDataset = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -283,7 +286,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payloadTrace });
+      await createEvalJobs({ event: payloadTrace, jobTimestamp });
 
       const jobsAfterTrace = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -344,7 +347,7 @@ describe("eval service tests", () => {
       };
 
       // This should exit early without an error as there is no trace yet.
-      await createEvalJobs({ event: payloadTrace });
+      await createEvalJobs({ event: payloadTrace, jobTimestamp });
 
       const jobsAfterDataset = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -372,7 +375,7 @@ describe("eval service tests", () => {
         datasetItemId,
       };
 
-      await createEvalJobs({ event: payloadDataset });
+      await createEvalJobs({ event: payloadDataset, jobTimestamp });
 
       const jobsAfterTrace = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -413,7 +416,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -467,8 +470,8 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
-      await createEvalJobs({ event: payload }); // calling it twice to check it is only generated once
+      await createEvalJobs({ event: payload, jobTimestamp });
+      await createEvalJobs({ event: payload, jobTimestamp }); // calling it twice to check it is only generated once
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -507,7 +510,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -553,7 +556,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       const jobs = await kyselyPrisma.$kysely
         .selectFrom("job_executions")
@@ -635,7 +638,7 @@ describe("eval service tests", () => {
         traceId: traceId,
       };
 
-      await createEvalJobs({ event: payload });
+      await createEvalJobs({ event: payload, jobTimestamp });
 
       // Wait for .5s
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -651,6 +654,7 @@ describe("eval service tests", () => {
 
       await createEvalJobs({
         event: payload,
+        jobTimestamp,
       }); // calling it twice to check it is only generated once
 
       const jobs = await kyselyPrisma.$kysely
@@ -716,6 +720,7 @@ describe("eval service tests", () => {
 
       await createEvalJobs({
         event: payload,
+        jobTimestamp,
         enforcedJobTimeScope: "NEW", // the config must contain NEW
       });
 
@@ -769,6 +774,7 @@ describe("eval service tests", () => {
 
       await createEvalJobs({
         event: payload,
+        jobTimestamp,
         enforcedJobTimeScope: "NEW", // the config must contain NEW
       });
 
@@ -783,7 +789,65 @@ describe("eval service tests", () => {
       expect(jobs.length).toBe(1);
     }, 10_000);
 
-    test("creates eval for trace with timestamp in the future", async () => {
+    test("does create eval for observation which is way in the past if timestamp is provided", async () => {
+      const traceId = randomUUID();
+
+      const timestamp = new Date(Date.now() - 1000 * 60 * 60 * 24 * 365 * 1);
+      const trace = createTrace({
+        project_id: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
+        id: traceId,
+        timestamp: timestamp.getTime(),
+      });
+
+      const observation = createObservation({
+        project_id: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
+        id: randomUUID(),
+        start_time: timestamp.getTime(),
+      });
+
+      await createObservationsCh([observation]);
+      await createTracesCh([trace]);
+
+      const jobConfiguration = await prisma.jobConfiguration.create({
+        data: {
+          id: randomUUID(),
+          projectId: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
+          filter: JSON.parse("[]"),
+          jobType: "EVAL",
+          delay: 0,
+          sampling: new Decimal("1"),
+          targetObject: "observation",
+          scoreName: "score",
+          variableMapping: JSON.parse("[]"),
+          timeScope: ["EXISTING"],
+        },
+      });
+
+      const payload = {
+        projectId: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
+        traceId: traceId,
+        configId: jobConfiguration.id,
+        timestamp: timestamp,
+        observationId: observation.id,
+      };
+
+      await createEvalJobs({
+        event: payload,
+        jobTimestamp,
+        enforcedJobTimeScope: "EXISTING", // the config must contain NEW
+      });
+
+      const jobs = await kyselyPrisma.$kysely
+        .selectFrom("job_executions")
+        .selectAll()
+        .where("project_id", "=", "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a")
+        .where("job_configuration_id", "in", [jobConfiguration.id])
+        .execute();
+
+      expect(jobs.length).toBe(1);
+    }, 10_000);
+
+    test("create eval for trace with timestamp in the near future", async () => {
       const traceId = randomUUID();
 
       await prisma.jobConfiguration.create({
@@ -804,9 +868,7 @@ describe("eval service tests", () => {
       const trace = createTrace({
         project_id: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
         id: traceId,
-        timestamp: new Date(
-          Date.now() + 1000 * 60 * 60 * 24 * 365 * 1,
-        ).getTime(),
+        timestamp: new Date(Date.now() + 1000 * 60 * 60 * 24).getTime(),
       });
 
       await createTracesCh([trace]);
@@ -816,6 +878,7 @@ describe("eval service tests", () => {
           projectId: "7a88fb47-b4e2-43b8-a06c-a5ce950dc53a",
           traceId: traceId,
         },
+        jobTimestamp,
       });
 
       const jobs = await kyselyPrisma.$kysely

@@ -2,9 +2,10 @@ import { logger } from "@langfuse/shared/src/server";
 import { z } from "zod";
 
 import { withMiddlewares } from "@/src/features/public-api/server/withMiddlewares";
-import { createAuthedAPIRoute } from "@/src/features/public-api/server/createAuthedAPIRoute";
+import { createAuthedProjectAPIRoute } from "@/src/features/public-api/server/createAuthedProjectAPIRoute";
 import { updatePrompt } from "@/src/features/prompts/server/actions/updatePrompts";
 import { LangfuseNotFoundError } from "@langfuse/shared";
+import { auditLog } from "@/src/features/audit-logs/auditLog";
 
 const UpdatePromptBodySchema = z.object({
   newLabels: z
@@ -15,7 +16,7 @@ const UpdatePromptBodySchema = z.object({
 });
 
 export const promptVersionHandler = withMiddlewares({
-  PATCH: createAuthedAPIRoute({
+  PATCH: createAuthedProjectAPIRoute({
     name: "Update Prompt",
     bodySchema: UpdatePromptBodySchema,
     responseSchema: z.any(),
@@ -29,6 +30,15 @@ export const promptVersionHandler = withMiddlewares({
           projectId: auth.scope.projectId,
           promptVersion: Number(promptVersion),
           newLabels,
+        });
+
+        await auditLog({
+          action: "update",
+          resourceType: "prompt",
+          resourceId: prompt.id,
+          projectId: auth.scope.projectId,
+          orgId: auth.scope.orgId,
+          apiKeyId: auth.scope.apiKeyId,
         });
 
         logger.info(`Prompt updated ${JSON.stringify(prompt)}`);

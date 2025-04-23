@@ -17,17 +17,33 @@ import {
 } from "@/src/server/api/definitions/scoresTable";
 import { api } from "@/src/utils/api";
 
-import type { RouterOutput, RouterInput } from "@/src/utils/types";
+import type { RouterOutput } from "@/src/utils/types";
 import {
   isPresent,
   type FilterState,
   type ScoreDataType,
+  BatchExportTableName,
+  BatchActionType,
 } from "@langfuse/shared";
 import { useQueryParams, withDefault, NumberParam } from "use-query-params";
 import TagList from "@/src/features/tag/components/TagList";
 import { cn } from "@/src/utils/tailwind";
 import useColumnOrder from "@/src/features/column-visibility/hooks/useColumnOrder";
 import { LocalIsoDate } from "@/src/components/LocalIsoDate";
+import {
+  useEnvironmentFilter,
+  convertSelectedEnvironmentsToFilter,
+} from "@/src/hooks/use-environment-filter";
+import { Badge } from "@/src/components/ui/badge";
+import { BatchExportTableButton } from "@/src/components/BatchExportTableButton";
+import { showSuccessToast } from "@/src/features/notifications/showSuccessToast";
+import { TableActionMenu } from "@/src/features/table/components/TableActionMenu";
+import React, { useState } from "react";
+import type { TableAction } from "@/src/features/table/types";
+import type { RowSelectionState } from "@tanstack/react-table";
+import { useHasEntitlement } from "@/src/features/entitlements/hooks";
+import { useSelectAll } from "@/src/features/table/hooks/useSelectAll";
+import { TableSelectionManager } from "@/src/features/table/components/TableSelectionManager";
 
 export type ScoresTableRow = {
   id: string;
@@ -43,17 +59,14 @@ export type ScoresTableRow = {
     name?: string;
   };
   comment?: string;
+  metadata?: unknown;
   observationId?: string;
   traceName?: string;
   userId?: string;
   jobConfigurationId?: string;
   traceTags?: string[];
+  environment?: string;
 };
-
-export type ScoreFilterInput = Omit<
-  RouterInput["scores"]["all"],
-  "projectId" | "userId"
->;
 
 function createFilterState(
   userFilterState: FilterState,
@@ -88,10 +101,13 @@ export default function ScoresTable({
   hiddenColumns?: string[];
   localStorageSuffix?: string;
 }) {
+  const utils = api.useUtils();
+  const [selectedRows, setSelectedRows] = useState<RowSelectionState>({});
   const [paginationState, setPaginationState] = useQueryParams({
     pageIndex: withDefault(NumberParam, 0),
     pageSize: withDefault(NumberParam, 50),
   });
+  const { selectAll, setSelectAll } = useSelectAll(projectId, "scores");
 
   const [rowHeight, setRowHeight] = useRowHeightLocalStorage("scores", "s");
   const { selectedOption, dateRange, setDateRangeAndOption } =
@@ -114,12 +130,39 @@ export default function ScoresTable({
       ]
     : [];
 
-  const combinedFilter = userFilterState.concat(dateRangeFilter);
-  const filterState = createFilterState(combinedFilter, [
-    ...(userId ? [{ key: "User ID", value: userId }] : []),
-    ...(traceId ? [{ key: "Trace ID", value: traceId }] : []),
-    ...(observationId ? [{ key: "Observation ID", value: observationId }] : []),
-  ]);
+  const environmentFilterOptions =
+    api.projects.environmentFilterOptions.useQuery(
+      { projectId },
+      {
+        trpc: { context: { skipBatch: true } },
+        refetchOnMount: false,
+        refetchOnWindowFocus: false,
+        refetchOnReconnect: false,
+        staleTime: Infinity,
+      },
+    );
+
+  const environmentOptions =
+    environmentFilterOptions.data?.map((value) => value.environment) || [];
+
+  const { selectedEnvironments, setSelectedEnvironments } =
+    useEnvironmentFilter(environmentOptions, projectId);
+
+  const environmentFilter = convertSelectedEnvironmentsToFilter(
+    ["environment"],
+    selectedEnvironments,
+  );
+
+  const filterState = createFilterState(
+    userFilterState.concat(dateRangeFilter, environmentFilter),
+    [
+      ...(userId ? [{ key: "User ID", value: userId }] : []),
+      ...(traceId ? [{ key: "Trace ID", value: traceId }] : []),
+      ...(observationId
+        ? [{ key: "Observation ID", value: observationId }]
+        : []),
+    ],
+  );
 
   const [orderByState, setOrderByState] = useOrderByState({
     column: "timestamp",
@@ -145,6 +188,38 @@ export default function ScoresTable({
   const totalScoreCountQuery = api.scores.countAll.useQuery(getCountPayload);
   const totalCount = totalScoreCountQuery.data?.totalCount ?? null;
 
+  const scoreDeleteMutation = api.scores.deleteMany.useMutation({
+    onSuccess: () => {
+      showSuccessToast({
+        title: "Scores deleted",
+        description:
+          "Selected scores will be deleted. Scores are removed asynchronously and may continue to be visible for up to 15 minutes.",
+      });
+    },
+    onSettled: () => {
+      void utils.scores.all.invalidate();
+    },
+  });
+
+  const hasTraceDeletionEntitlement = useHasEntitlement("trace-deletion");
+
+  const handleDeleteScores = async ({ projectId }: { projectId: string }) => {
+    const selectedScoreIds = Object.keys(selectedRows).filter((scoreId) =>
+      scores.data?.scores.map((s) => s.id).includes(scoreId),
+    );
+
+    await scoreDeleteMutation.mutateAsync({
+      projectId,
+      scoreIds: selectedScoreIds,
+      query: {
+        filter: filterState,
+        orderBy: orderByState,
+      },
+      isBatchAction: selectAll,
+    });
+    setSelectedRows({});
+  };
+
   const filterOptions = api.scores.filterOptions.useQuery(
     {
       projectId,
@@ -166,7 +241,24 @@ export default function ScoresTable({
     },
   );
 
+  const { selectActionColumn } = TableSelectionManager<ScoresTableRow>({
+    projectId,
+    tableName: "scores",
+    setSelectedRows,
+  });
+
   const rawColumns: LangfuseColumnDef<ScoresTableRow>[] = [
+    selectActionColumn,
+    {
+      accessorKey: "id",
+      id: "id",
+      enableColumnFilter: false,
+      header: "Score ID",
+      size: 100,
+      enableSorting: false,
+      defaultHidden: true,
+      enableHiding: true,
+    },
     {
       accessorKey: "traceId",
       id: "traceId",
@@ -223,6 +315,24 @@ export default function ScoresTable({
             value={value}
           />
         ) : undefined;
+      },
+    },
+    {
+      accessorKey: "environment",
+      header: "Environment",
+      id: "environment",
+      size: 150,
+      enableHiding: true,
+      cell: ({ row }) => {
+        const value = row.getValue("environment") as string | undefined;
+        return value ? (
+          <Badge
+            variant="secondary"
+            className="max-w-fit truncate rounded-sm px-1 font-normal"
+          >
+            {value}
+          </Badge>
+        ) : null;
       },
     },
     {
@@ -291,6 +401,28 @@ export default function ScoresTable({
       enableHiding: true,
       enableSorting: true,
       size: 100,
+    },
+    {
+      accessorKey: "metadata",
+      header: "Metadata",
+      id: "metadata",
+      size: 400,
+      headerTooltip: {
+        description: "Add metadata to scores to track additional information.",
+        // TODO: docs for metadata on scores
+        href: "https://langfuse.com/docs/tracing-features/metadata",
+      },
+      cell: ({ row }) => {
+        const scoreId: ScoresTableRow["id"] = row.getValue("id");
+        return (
+          <ScoresMetadataCell
+            scoreId={scoreId}
+            projectId={projectId}
+            singleLine={rowHeight === "s"}
+          />
+        );
+      },
+      enableHiding: true,
     },
     {
       accessorKey: "comment",
@@ -376,6 +508,25 @@ export default function ScoresTable({
     },
   ];
 
+  const tableActions: TableAction[] = [
+    ...(hasTraceDeletionEntitlement
+      ? [
+          {
+            id: "score-delete",
+            type: BatchActionType.Delete,
+            label: "Delete Scores",
+            description:
+              "This action permanently deletes scores and cannot be undone. Score deletion happens asynchronously and may take up to 15 minutes.",
+            accessCheck: {
+              scope: "traces:delete",
+              entitlement: "trace-deletion",
+            },
+            execute: handleDeleteScores,
+          } as TableAction,
+        ]
+      : []),
+  ];
+
   const columns = rawColumns.filter(
     (c) => !!c.id && !hiddenColumns.includes(c.id),
   );
@@ -418,6 +569,7 @@ export default function ScoresTable({
       userId: score.traceUserId ?? undefined,
       jobConfigurationId: score.jobConfigurationId ?? undefined,
       traceTags: score.traceTags ?? undefined,
+      environment: score.environment ?? undefined,
     };
   };
 
@@ -440,10 +592,42 @@ export default function ScoresTable({
         setColumnVisibility={setColumnVisibility}
         columnOrder={columnOrder}
         setColumnOrder={setColumnOrder}
+        actionButtons={[
+          Object.keys(selectedRows).filter((scoreId) =>
+            scores.data?.scores.map((s) => s.id).includes(scoreId),
+          ).length > 0 ? (
+            <TableActionMenu
+              key="scores-multi-select-actions"
+              projectId={projectId}
+              actions={tableActions}
+              tableName={BatchExportTableName.Scores}
+            />
+          ) : null,
+          <BatchExportTableButton
+            {...{ projectId, filterState, orderByState }}
+            tableName={BatchExportTableName.Scores}
+            key="batchExport"
+          />,
+        ]}
         rowHeight={rowHeight}
         setRowHeight={setRowHeight}
         selectedOption={selectedOption}
         setDateRangeAndOption={setDateRangeAndOption}
+        multiSelect={{
+          selectAll,
+          setSelectAll,
+          selectedRowIds: Object.keys(selectedRows).filter((scoreId) =>
+            scores.data?.scores.map((s) => s.id).includes(scoreId),
+          ),
+          setRowSelection: setSelectedRows,
+          totalCount,
+          ...paginationState,
+        }}
+        environmentFilter={{
+          values: selectedEnvironments,
+          onValueChange: setSelectedEnvironments,
+          options: environmentOptions.map((env) => ({ value: env })),
+        }}
       />
       <DataTable
         columns={columns}
@@ -473,8 +657,40 @@ export default function ScoresTable({
         onColumnVisibilityChange={setColumnVisibility}
         columnOrder={columnOrder}
         onColumnOrderChange={setColumnOrder}
+        rowSelection={selectedRows}
+        setRowSelection={setSelectedRows}
         rowHeight={rowHeight}
       />
     </>
   );
 }
+
+const ScoresMetadataCell = ({
+  scoreId,
+  projectId,
+  singleLine = false,
+}: {
+  scoreId: string;
+  projectId: string;
+  singleLine?: boolean;
+}) => {
+  const score = api.scores.byId.useQuery(
+    { scoreId, projectId },
+    {
+      enabled: typeof scoreId === "string",
+      trpc: {
+        context: {
+          skipBatch: true,
+        },
+      },
+      refetchOnMount: false, // prevents refetching loops
+    },
+  );
+  return (
+    <IOTableCell
+      isLoading={score.isLoading}
+      data={score.data?.metadata}
+      singleLine={singleLine}
+    />
+  );
+};

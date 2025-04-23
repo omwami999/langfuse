@@ -27,6 +27,9 @@ const prepareProjectsAndApiKeys = async (
       create: {
         id: orgId,
         name: `Organization for ${projectId}`,
+        cloudConfig: {
+          plan: "Team",
+        },
       },
     });
 
@@ -55,6 +58,7 @@ const prepareProjectsAndApiKeys = async (
           publicKey: `pk-${Math.random().toString(36).substr(2, 9)}`,
           hashedSecretKey: sk,
           displaySecretKey: getDisplaySecretKey(sk),
+          scope: "PROJECT",
           project: {
             connect: {
               id: projectId,

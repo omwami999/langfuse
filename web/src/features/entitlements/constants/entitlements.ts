@@ -7,7 +7,9 @@ const entitlements = [
   "model-based-evaluations",
   "rbac-project-roles",
   "cloud-billing",
+  "cloud-multi-tenant-sso",
   "integration-posthog",
+  "integration-blobstorage",
   "annotation-queues",
   "self-host-ui-customization",
   "self-host-allowed-organization-creators",
@@ -15,6 +17,9 @@ const entitlements = [
   "trace-deletion", // Not in use anymore, but necessary to use the TableAction type.
   "audit-logs",
   "data-retention",
+  "prompt-protected-labels",
+  "custom-dashboards",
+  "admin-api",
 ] as const;
 export type Entitlement = (typeof entitlements)[number];
 
@@ -26,9 +31,10 @@ const cloudAllPlansEntitlements: Entitlement[] = [
   "annotation-queues",
   "prompt-experiments",
   "trace-deletion",
+  "custom-dashboards",
 ];
 
-const selfHostedAllPlansEntitlements: Entitlement[] = ["trace-deletion"];
+const selfHostedAllPlansEntitlements: Entitlement[] = ["trace-deletion",  "custom-dashboards"];
 
 // Entitlement Limits: Limits on the number of resources that can be created/used
 const entitlementLimits = [
@@ -63,10 +69,20 @@ export const entitlementAccess: Record<
       "prompt-management-count-prompts": false,
     },
   },
+  "cloud:core": {
+    entitlements: [...cloudAllPlansEntitlements],
+    entitlementLimits: {
+      "organization-member-count": false,
+      "data-access-days": 90,
+      "annotation-queue-count": 3,
+      "model-based-evaluations-count-evaluators": false,
+      "prompt-management-count-prompts": false,
+    },
+  },
   "cloud:pro": {
     entitlements: [...cloudAllPlansEntitlements],
     entitlementLimits: {
-      "annotation-queue-count": 3,
+      "annotation-queue-count": false,
       "organization-member-count": false,
       "data-access-days": false,
       "model-based-evaluations-count-evaluators": false,
@@ -79,6 +95,29 @@ export const entitlementAccess: Record<
       "rbac-project-roles",
       "audit-logs",
       "data-retention",
+      "cloud-multi-tenant-sso",
+      "integration-blobstorage",
+      "prompt-protected-labels",
+      "admin-api",
+    ],
+    entitlementLimits: {
+      "annotation-queue-count": false,
+      "organization-member-count": false,
+      "data-access-days": false,
+      "model-based-evaluations-count-evaluators": false,
+      "prompt-management-count-prompts": false,
+    },
+  },
+  "cloud:enterprise": {
+    entitlements: [
+      ...cloudAllPlansEntitlements,
+      "rbac-project-roles",
+      "audit-logs",
+      "data-retention",
+      "cloud-multi-tenant-sso",
+      "integration-blobstorage",
+      "prompt-protected-labels",
+      "admin-api",
     ],
     entitlementLimits: {
       "annotation-queue-count": false,
@@ -106,6 +145,7 @@ export const entitlementAccess: Record<
       "playground",
       "prompt-experiments",
       "integration-posthog",
+      "integration-blobstorage",
     ],
     entitlementLimits: {
       "annotation-queue-count": false,
@@ -126,8 +166,11 @@ export const entitlementAccess: Record<
       "self-host-allowed-organization-creators",
       "self-host-ui-customization",
       "integration-posthog",
+      "integration-blobstorage",
       "audit-logs",
       "data-retention",
+      "prompt-protected-labels",
+      "admin-api",
     ],
     entitlementLimits: {
       "annotation-queue-count": false,

@@ -14,6 +14,7 @@ import {
   QueueJobs,
   redis,
   ProjectDeleteQueue,
+  getEnvironmentsForProject,
 } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
 
@@ -174,6 +175,7 @@ export const projectsRouter = createTRPCRouter({
       await ctx.prisma.apiKey.deleteMany({
         where: {
           projectId: input.projectId,
+          scope: "PROJECT",
         },
       });
 
@@ -275,4 +277,8 @@ export const projectsRouter = createTRPCRouter({
         input.projectId,
       );
     }),
+
+  environmentFilterOptions: protectedProjectProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ input }) => getEnvironmentsForProject(input)),
 });

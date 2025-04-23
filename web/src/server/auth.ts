@@ -28,6 +28,7 @@ import Auth0Provider from "next-auth/providers/auth0";
 import CognitoProvider from "next-auth/providers/cognito";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import KeycloakProvider from "next-auth/providers/keycloak";
+import WorkOSProvider from "next-auth/providers/workos";
 import { type Provider } from "next-auth/providers/index";
 import { getCookieName, getCookieOptions } from "./utils/cookies";
 import {
@@ -51,6 +52,7 @@ import {
 import { projectRoleAccessRights } from "@/src/features/rbac/constants/projectAccessRights";
 import { hasEntitlementBasedOnPlan } from "@/src/features/entitlements/server/hasEntitlement";
 import { getSSOBlockedDomains } from "@/src/features/auth-credentials/server/signupApiHandler";
+import { createSupportEmailHash } from "@/src/features/support-chat/createSupportEmailHash";
 
 function canCreateOrganizations(userEmail: string | null): boolean {
   const instancePlan = getSelfHostedInstancePlanServerSide();
@@ -295,6 +297,12 @@ if (env.AUTH_GITLAB_CLIENT_ID && env.AUTH_GITLAB_CLIENT_SECRET)
       client: {
         token_endpoint_auth_method: env.AUTH_GITLAB_CLIENT_AUTH_METHOD,
       },
+      authorization: {
+        url: `${env.AUTH_GITLAB_URL}/oauth/authorize`,
+        params: { scope: "read_user" },
+      },
+      token: `${env.AUTH_GITLAB_URL}/oauth/token`,
+      userinfo: `${env.AUTH_GITLAB_URL}/api/v4/user`,
       checks: env.AUTH_GITLAB_CHECKS,
     }),
   );
@@ -356,6 +364,19 @@ if (
     }),
   );
 
+if (env.AUTH_WORKOS_CLIENT_ID && env.AUTH_WORKOS_CLIENT_SECRET)
+  staticProviders.push(
+    WorkOSProvider({
+      clientId: env.AUTH_WORKOS_CLIENT_ID,
+      clientSecret: env.AUTH_WORKOS_CLIENT_SECRET,
+      allowDangerousEmailAccountLinking:
+        env.AUTH_WORKOS_ALLOW_ACCOUNT_LINKING === "true",
+      client: {
+        token_endpoint_auth_method: "client_secret_post",
+      },
+    }),
+  );
+
 // Extend Prisma Adapter
 const prismaAdapter = PrismaAdapter(prisma);
 const ignoredAccountFields = env.AUTH_IGNORE_ACCOUNT_FIELDS?.split(",") ?? [];
@@ -395,6 +416,11 @@ const extendedPrismaAdapter: Adapter = {
     if (data.provider === "keycloak") {
       delete data["refresh_expires_in"];
       delete data["not-before-policy"];
+    }
+
+    // WorkOS returns profile data that doesn't match the schema
+    if (data.provider === "workos") {
+      delete data["profile"];
     }
 
     // Optionally, remove fields returned by the provider that cause issues with the adapter
@@ -467,8 +493,6 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             environment: {
               enableExperimentalFeatures:
                 env.LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES === "true",
-              disableExpensivePostgresQueries:
-                env.LANGFUSE_DISABLE_EXPENSIVE_POSTGRES_QUERIES === "true",
               // Enables features that are only available under an enterprise license when self-hosting Langfuse
               // If you edit this line, you risk executing code that is not MIT licensed (self-contained in /ee folders otherwise)
               selfHostedInstancePlan: getSelfHostedInstancePlanServerSide(),
@@ -480,6 +504,9 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                     id: dbUser.id,
                     name: dbUser.name,
                     email: dbUser.email,
+                    emailSupportHash: dbUser.email
+                      ? createSupportEmailHash(dbUser.email)
+                      : undefined,
                     image: dbUser.image,
                     admin: dbUser.admin,
                     canCreateOrganizations: canCreateOrganizations(
@@ -494,6 +521,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                           id: orgMembership.organization.id,
                           name: orgMembership.organization.name,
                           role: orgMembership.role,
+                          metadata:
+                            (orgMembership.organization.metadata as Record<
+                              string,
+                              unknown
+                            >) ?? {},
                           cloudConfig: parsedCloudConfig.data,
                           projects: orgMembership.organization.projects
                             .map((project) => {
@@ -508,6 +540,11 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                                 role: projectRole,
                                 retentionDays: project.retentionDays,
                                 deletedAt: project.deletedAt,
+                                metadata:
+                                  (project.metadata as Record<
+                                    string,
+                                    unknown
+                                  >) ?? {},
                               };
                             })
                             // Only include projects where the user has the required role

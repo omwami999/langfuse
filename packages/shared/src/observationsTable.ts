@@ -1,8 +1,8 @@
+import { ObservationLevelType } from "./domain";
 import {
   type OptionsDefinition,
   type ColumnDefinition,
 } from "./tableDefinitions";
-import { ObservationLevelType } from "./server";
 
 // to be used server side
 export const observationsTableCols: ColumnDefinition[] = [
@@ -154,8 +154,8 @@ export const observationsTableCols: ColumnDefinition[] = [
     nullable: true,
   },
   {
-    name: "Usage",
-    id: "usage",
+    name: "Tokens",
+    id: "tokens",
     type: "number",
     internal: 'o."total_tokens"',
   },

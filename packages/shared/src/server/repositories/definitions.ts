@@ -132,6 +132,7 @@ export const scoreRecordBaseSchema = z.object({
   value: z.number().nullish(),
   source: z.string(),
   comment: z.string().nullish(),
+  metadata: z.record(z.string()),
   author_user_id: z.string().nullish(),
   config_id: z.string().nullish(),
   data_type: z.enum(["NUMERIC", "CATEGORICAL", "BOOLEAN"]).nullish(),
@@ -156,7 +157,7 @@ export const scoreRecordInsertSchema = scoreRecordBaseSchema.extend({
 });
 export type ScoreRecordInsertType = z.infer<typeof scoreRecordInsertSchema>;
 
-export const eventLogRecordBaseSchema = z.object({
+export const blobStorageFileLogRecordBaseSchema = z.object({
   id: z.string(),
   project_id: z.string(),
   entity_type: z.string(),
@@ -166,18 +167,25 @@ export const eventLogRecordBaseSchema = z.object({
   event_id: z.string().nullable(),
   bucket_name: z.string(),
   bucket_path: z.string(),
+  is_deleted: z.number(),
 });
-export const eventLogRecordReadSchema = eventLogRecordBaseSchema.extend({
-  created_at: clickhouseStringDateSchema,
-  updated_at: clickhouseStringDateSchema,
-});
-export type EventLogRecordReadType = z.infer<typeof eventLogRecordReadSchema>;
-export const eventLogRecordInsertSchema = eventLogRecordBaseSchema.extend({
-  created_at: z.number(),
-  updated_at: z.number(),
-});
-export type EventLogRecordInsertType = z.infer<
-  typeof eventLogRecordInsertSchema
+export const blobStorageFileRefRecordReadSchema =
+  blobStorageFileLogRecordBaseSchema.extend({
+    created_at: clickhouseStringDateSchema,
+    updated_at: clickhouseStringDateSchema,
+    event_ts: clickhouseStringDateSchema,
+  });
+export type BlobStorageFileRefRecordReadType = z.infer<
+  typeof blobStorageFileRefRecordReadSchema
+>;
+export const blobStorageFileLogRecordInsertSchema =
+  blobStorageFileLogRecordBaseSchema.extend({
+    created_at: z.number(),
+    updated_at: z.number(),
+    event_ts: z.number(),
+  });
+export type BlobStorageFileLogInsertType = z.infer<
+  typeof blobStorageFileLogRecordInsertSchema
 >;
 
 export const convertTraceReadToInsert = (
@@ -350,6 +358,7 @@ export const convertPostgresScoreToInsert = (
     value: score.value,
     source: score.source,
     comment: score.comment,
+    metadata: score.metadata ?? {},
     author_user_id: score.author_user_id,
     config_id: score.config_id,
     data_type: score.data_type,

@@ -2,7 +2,7 @@ import { type IngestionEventType } from "@langfuse/shared/src/server";
 import { randomUUID } from "crypto";
 import { ObservationLevel } from "@langfuse/shared";
 
-const convertNanoTimestampToISO = (
+export const convertNanoTimestampToISO = (
   timestamp:
     | number
     | string
@@ -12,14 +12,22 @@ const convertNanoTimestampToISO = (
       },
 ) => {
   if (typeof timestamp === "string") {
-    return new Date(parseInt(timestamp, 10) / 1e6).toISOString();
+    return new Date(Number(BigInt(timestamp) / BigInt(1e6))).toISOString();
   }
   if (typeof timestamp === "number") {
     return new Date(timestamp / 1e6).toISOString();
   }
-  return new Date(
-    (timestamp.high * Math.pow(2, 32) + timestamp.low) / 1e6,
-  ).toISOString();
+
+  // Convert high and low to BigInt
+  const highBits = BigInt(timestamp.high) << BigInt(32);
+  const lowBits = BigInt(timestamp.low >>> 0);
+
+  // Combine high and low bits
+  const nanosBigInt = highBits | lowBits;
+
+  // Convert nanoseconds to milliseconds for JavaScript Date
+  const millisBigInt = nanosBigInt / BigInt(1000000);
+  return new Date(Number(millisBigInt)).toISOString();
 };
 
 const convertValueToPlainJavascript = (value: Record<string, any>): any => {
@@ -128,7 +136,58 @@ const extractInputAndOutput = (
       event.name === "gen_ai.content.completion",
   )?.attributes;
   if (input || output) {
+    input =
+      input?.reduce((acc: any, attr: any) => {
+        acc[attr.key] = convertValueToPlainJavascript(attr.value);
+        return acc;
+      }, {}) ?? {};
+    output =
+      output?.reduce((acc: any, attr: any) => {
+        acc[attr.key] = convertValueToPlainJavascript(attr.value);
+        return acc;
+      }, {}) ?? {};
+    // Here, we are interested in the attributes of the event. Usually gen_ai.prompt and gen_ai.completion.
+    // We can use the current function again to extract them from the event attributes.
+    const { input: eventInput } = extractInputAndOutput([], input);
+    const { output: eventOutput } = extractInputAndOutput([], output);
+    return { input: eventInput || input, output: eventOutput || output };
+  }
+
+  // Logfire uses `prompt` and `all_messages_events` property on spans
+  input = attributes["prompt"];
+  output = attributes["all_messages_events"];
+  if (input || output) {
     return { input, output };
+  }
+
+  // Logfire uses single `events` array for GenAI events.
+  const eventsArray = attributes["events"];
+  if (typeof eventsArray === "string" || Array.isArray(eventsArray)) {
+    let events = eventsArray as any[];
+    if (typeof eventsArray === "string") {
+      try {
+        events = JSON.parse(eventsArray);
+      } catch (e) {
+        // fallthrough
+        events = [];
+      }
+    }
+
+    // Find the gen_ai.choice event for output
+    const choiceEvent = events.find(
+      (event) => event["event.name"] === "gen_ai.choice",
+    );
+    // All other events are considered input
+    const inputEvents = events.filter(
+      (event) => event["event.name"] !== "gen_ai.choice",
+    );
+
+    if (choiceEvent || inputEvents.length > 0) {
+      return {
+        input: inputEvents.length > 0 ? inputEvents : null,
+        output: choiceEvent || null,
+      };
+    }
   }
 
   // MLFlow sets mlflow.spanInputs and mlflow.spanOutputs
@@ -148,6 +207,13 @@ const extractInputAndOutput = (
   // SmolAgents sets input.value and output.value
   input = attributes["input.value"];
   output = attributes["output.value"];
+  if (input || output) {
+    return { input, output };
+  }
+
+  // Pydantic uses input and output
+  input = attributes["input"];
+  output = attributes["output"];
   if (input || output) {
     return { input, output };
   }
@@ -197,6 +263,56 @@ const extractEnvironment = (
   return "default";
 };
 
+const extractName = (
+  spanName: string,
+  attributes: Record<string, unknown>,
+): string => {
+  const nameKeys = ["logfire.msg"];
+  for (const key of nameKeys) {
+    if (attributes[key]) {
+      return typeof attributes[key] === "string"
+        ? (attributes[key] as string)
+        : JSON.stringify(attributes[key]);
+    }
+  }
+  return spanName;
+};
+
+const extractMetadata = (
+  attributes: Record<string, unknown>,
+): Record<string, unknown> => {
+  // Extract top-level metadata object if available
+  let metadata: Record<string, unknown> = {};
+  if (attributes["langfuse.metadata"]) {
+    try {
+      // If it's a string (JSON), parse it
+      if (typeof attributes["langfuse.metadata"] === "string") {
+        metadata = JSON.parse(attributes["langfuse.metadata"] as string);
+      }
+      // If it's already an object, use it
+      else if (typeof attributes["langfuse.metadata"] === "object") {
+        metadata = attributes["langfuse.metadata"] as Record<string, unknown>;
+      }
+    } catch (e) {
+      // If parsing fails, continue with nested metadata extraction
+    }
+  }
+
+  // Extract metadata from langfuse.metadata.* keys
+  const metadataAttributes = Object.keys(attributes).filter((key) =>
+    key.startsWith("langfuse.metadata."),
+  );
+
+  return {
+    ...metadata,
+    ...metadataAttributes.reduce((acc: Record<string, unknown>, key) => {
+      const metadataKey = key.replace("langfuse.metadata.", "");
+      acc[metadataKey] = attributes[key];
+      return acc;
+    }, {}),
+  };
+};
+
 const extractUserId = (
   attributes: Record<string, unknown>,
 ): string | undefined => {
@@ -230,6 +346,14 @@ const extractModelParameters = (
   if (attributes["llm.invocation_parameters"]) {
     try {
       return JSON.parse(attributes["llm.invocation_parameters"] as string);
+    } catch (e) {
+      // fallthrough
+    }
+  }
+
+  if (attributes["model_config"]) {
+    try {
+      return JSON.parse(attributes["model_config"] as string);
     } catch (e) {
       // fallthrough
     }
@@ -286,7 +410,11 @@ const extractUsageDetails = (
       .replace("llm.token_count.", "");
     const mappedUsageDetailKey =
       usageDetailKeyMapping[usageDetailKey] ?? usageDetailKey;
-    acc[mappedUsageDetailKey] = attributes[key];
+    // Cast the respective key to a number
+    const value = Number(attributes[key]);
+    if (!Number.isNaN(value)) {
+      acc[mappedUsageDetailKey] = value;
+    }
     return acc;
   }, {});
 };
@@ -298,6 +426,45 @@ const extractCostDetails = (
     return { total: attributes["gen_ai.usage.cost"] };
   }
   return {};
+};
+
+const extractTags = (attributes: Record<string, unknown>): string[] => {
+  const tagsValue = attributes["langfuse.tags"];
+
+  // If no tags, return empty array
+  if (tagsValue === undefined || tagsValue === null) {
+    return [];
+  }
+
+  // If already an array (converted by convertValueToPlainJavascript)
+  if (Array.isArray(tagsValue)) {
+    return tagsValue.map((tag) => String(tag));
+  }
+
+  // If JSON string array
+  if (typeof tagsValue === "string" && tagsValue.trim().startsWith("[")) {
+    try {
+      const parsedTags = JSON.parse(tagsValue);
+      if (Array.isArray(parsedTags)) {
+        return parsedTags.map((tag) => String(tag));
+      }
+    } catch (e) {
+      // If parsing fails, continue with other methods
+    }
+  }
+
+  // If CSV string
+  if (typeof tagsValue === "string" && tagsValue.includes(",")) {
+    return tagsValue.split(",").map((tag) => tag.trim());
+  }
+
+  // If single string value
+  if (typeof tagsValue === "string") {
+    return [tagsValue];
+  }
+
+  // Fallback to empty array
+  return [];
 };
 
 /**
@@ -331,13 +498,17 @@ export const convertOtelSpanToIngestionEvent = (
           )
         : null;
 
+      const spanAttributeMetadata = extractMetadata(attributes);
+      const resourceAttributeMetadata = extractMetadata(resourceAttributes);
       if (!parentObservationId) {
         // Create a trace for any root span
         const trace = {
           id: Buffer.from(span.traceId?.data ?? span.traceId).toString("hex"),
           timestamp: convertNanoTimestampToISO(span.startTimeUnixNano),
-          name: span.name,
+          name: extractName(span.name, attributes),
           metadata: {
+            ...resourceAttributeMetadata,
+            ...spanAttributeMetadata,
             attributes,
             resourceAttributes,
             scope: scopeSpan?.scope,
@@ -352,7 +523,7 @@ export const convertOtelSpanToIngestionEvent = (
           public:
             attributes?.["langfuse.public"] === true ||
             attributes?.["langfuse.public"] === "true",
-          tags: attributes?.["langfuse.tags"] ?? [],
+          tags: extractTags(attributes),
 
           environment: extractEnvironment(attributes, resourceAttributes),
 
@@ -374,7 +545,7 @@ export const convertOtelSpanToIngestionEvent = (
           "hex",
         ),
         parentObservationId,
-        name: span.name,
+        name: extractName(span.name, attributes),
         startTime: convertNanoTimestampToISO(span.startTimeUnixNano),
         endTime: convertNanoTimestampToISO(span.endTimeUnixNano),
 
@@ -382,6 +553,8 @@ export const convertOtelSpanToIngestionEvent = (
 
         // Additional fields
         metadata: {
+          ...resourceAttributeMetadata,
+          ...spanAttributeMetadata,
           attributes,
           resourceAttributes,
           scope: scopeSpan?.scope,
@@ -411,7 +584,10 @@ export const convertOtelSpanToIngestionEvent = (
       // If the span has a model property, we consider it a generation.
       // Just checking for llm.* or gen_ai.* attributes leads to overreporting and wrong
       // aggregations for costs.
-      const isGeneration = Boolean(observation.model);
+      const isGeneration =
+        Boolean(observation.model) ||
+        ("openinference.span.kind" in attributes &&
+          attributes["openinference.span.kind"] === "LLM");
       events.push({
         id: randomUUID(),
         type: isGeneration ? "generation-create" : "span-create",

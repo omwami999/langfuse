@@ -45,7 +45,7 @@ export const userRouter = createTRPCRouter({
           input.filter ?? [],
           input.searchQuery ?? undefined,
           input.limit,
-          input.page,
+          input.page * input.limit,
           undefined,
         ),
         getTotalUserCount(
@@ -84,6 +84,7 @@ export const userRouter = createTRPCRouter({
 
       return metrics.map((metric) => ({
         userId: metric.userId,
+        environment: metric.environment,
         firstTrace: metric.minTimestamp,
         lastTrace: metric.maxTimestamp,
         totalPromptTokens: BigInt(metric.inputUsage),
